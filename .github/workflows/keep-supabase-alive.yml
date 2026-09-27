@@ -1,0 +1,102 @@
+name: Keep Supabase Projects Alive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+jobs:
+  ping-projects:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROJECTS: ${{ secrets.SUPABASE_PROJECTS }}
+
+    steps:
+      - name: Validate configuration and ping projects
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [[ -z "${SUPABASE_PROJECTS:-}" ]]; then
+            echo "Error: SUPABASE_PROJECTS is missing or empty."
+            exit 1
+          fi
+
+          if ! jq -e -s 'length == 1' <<<"$SUPABASE_PROJECTS" >/dev/null 2>&1; then
+            echo "Error: SUPABASE_PROJECTS must contain exactly one valid JSON value."
+            exit 1
+          fi
+
+          if ! jq -e 'type == "array"' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: SUPABASE_PROJECTS must be a JSON array."
+            exit 1
+          fi
+
+          if ! jq -e 'length > 0' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: SUPABASE_PROJECTS must contain at least one project."
+            exit 1
+          fi
+
+          if ! jq -e '
+            all(.[];
+              type == "object" and
+              (.name | type == "string" and length > 0) and
+              (.url | type == "string" and length > 0) and
+              (.key | type == "string" and length > 0) and
+              (.table | type == "string" and length > 0) and
+              (
+                ((has("column") and .column != null) | not) or
+                (.column | type == "string" and length > 0)
+              )
+            )
+          ' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: every project needs non-empty string values for name, url, key, and table; column is optional."
+            exit 1
+          fi
+
+          failures=0
+
+          while IFS= read -r project; do
+            name=$(jq -r '.name' <<<"$project")
+            url=$(jq -r '.url | sub("/+$"; "")' <<<"$project")
+            key=$(jq -r '.key' <<<"$project")
+            table=$(jq -r '.table' <<<"$project")
+            column=$(jq -r '.column // "id"' <<<"$project")
+            encoded_table=$(jq -rn --arg value "$table" '$value | @uri')
+
+            echo "Pinging $name..."
+
+            status=$(curl \
+              --silent \
+              --show-error \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --header "apikey: $key" \
+              --header "Authorization: Bearer $key" \
+              --get \
+              --data-urlencode "select=$column" \
+              --data-urlencode "limit=1" \
+              "$url/rest/v1/$encoded_table")
+            curl_exit=$?
+
+            if [[ $curl_exit -eq 0 && "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "✓ $name: OK ($status)"
+            elif [[ $curl_exit -ne 0 ]]; then
+              echo "✗ $name: FAILED (connection error; curl exit $curl_exit)"
+              failures=$((failures + 1))
+            else
+              echo "✗ $name: FAILED ($status)"
+              failures=$((failures + 1))
+            fi
+
+            echo
+          done < <(jq -c '.[]' <<<"$SUPABASE_PROJECTS")
+
+          if [[ $failures -gt 0 ]]; then
+            echo "$failures Supabase project(s) failed."
+            exit 1
+          fi
+
+          echo "All Supabase projects responded successfully."

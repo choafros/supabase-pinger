@@ -1,0 +1,415 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.github/
+  workflows/
+    keep-supabase-alive.yml
+.gitignore
+pinger.py
+README.md
+requirements.txt
+setup.sh
+supabase-projects.example.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".github/workflows/keep-supabase-alive.yml">
+name: Keep Supabase Projects Alive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+jobs:
+  ping-projects:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROJECTS: ${{ secrets.SUPABASE_PROJECTS }}
+
+    steps:
+      - name: Validate configuration and ping projects
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [[ -z "${SUPABASE_PROJECTS:-}" ]]; then
+            echo "Error: SUPABASE_PROJECTS is missing or empty."
+            exit 1
+          fi
+
+          if ! jq -e -s 'length == 1' <<<"$SUPABASE_PROJECTS" >/dev/null 2>&1; then
+            echo "Error: SUPABASE_PROJECTS must contain exactly one valid JSON value."
+            exit 1
+          fi
+
+          if ! jq -e 'type == "array"' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: SUPABASE_PROJECTS must be a JSON array."
+            exit 1
+          fi
+
+          if ! jq -e 'length > 0' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: SUPABASE_PROJECTS must contain at least one project."
+            exit 1
+          fi
+
+          if ! jq -e '
+            all(.[];
+              type == "object" and
+              (.name | type == "string" and length > 0) and
+              (.url | type == "string" and length > 0) and
+              (.key | type == "string" and length > 0) and
+              (.table | type == "string" and length > 0) and
+              (
+                ((has("column") and .column != null) | not) or
+                (.column | type == "string" and length > 0)
+              )
+            )
+          ' <<<"$SUPABASE_PROJECTS" >/dev/null; then
+            echo "Error: every project needs non-empty string values for name, url, key, and table; column is optional."
+            exit 1
+          fi
+
+          failures=0
+
+          while IFS= read -r project; do
+            name=$(jq -r '.name' <<<"$project")
+            url=$(jq -r '.url | sub("/+$"; "")' <<<"$project")
+            key=$(jq -r '.key' <<<"$project")
+            table=$(jq -r '.table' <<<"$project")
+            column=$(jq -r '.column // "id"' <<<"$project")
+            encoded_table=$(jq -rn --arg value "$table" '$value | @uri')
+
+            echo "Pinging $name..."
+
+            status=$(curl \
+              --silent \
+              --show-error \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --header "apikey: $key" \
+              --header "Authorization: Bearer $key" \
+              --get \
+              --data-urlencode "select=$column" \
+              --data-urlencode "limit=1" \
+              "$url/rest/v1/$encoded_table")
+            curl_exit=$?
+
+            if [[ $curl_exit -eq 0 && "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "✓ $name: OK ($status)"
+            elif [[ $curl_exit -ne 0 ]]; then
+              echo "✗ $name: FAILED (connection error; curl exit $curl_exit)"
+              failures=$((failures + 1))
+            else
+              echo "✗ $name: FAILED ($status)"
+              failures=$((failures + 1))
+            fi
+
+            echo
+          done < <(jq -c '.[]' <<<"$SUPABASE_PROJECTS")
+
+          if [[ $failures -gt 0 ]]; then
+            echo "$failures Supabase project(s) failed."
+            exit 1
+          fi
+
+          echo "All Supabase projects responded successfully."
+</file>
+
+<file path=".gitignore">
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+
+keeper.log
+
+__pycache__/
+*.pyc
+
+.DS_Store
+</file>
+
+<file path="pinger.py">
+import os
+from datetime import datetime
+
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+PROJECT_NAME = os.getenv("bn_club_name")
+SUPABASE_URL = os.getenv("bn_club_supabase_url")
+SUPABASE_KEY = os.getenv("bn_club_supabase_key")
+SUPABASE_TABLE = os.getenv("bn_club_supabase_table")
+
+if not PROJECT_NAME:
+    raise RuntimeError("SUPABASE_PROJECT_NAME is missing from .env")
+
+if not SUPABASE_URL:
+    raise RuntimeError("SUPABASE_URL is missing from .env")
+
+if not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_KEY is missing from .env")
+
+if not SUPABASE_TABLE:
+    raise RuntimeError("SUPABASE_TABLE is missing from .env")
+
+
+def ping_supabase():
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+
+    params = {
+        "select": "id",
+        "limit": 1,
+    }
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+
+        if response.ok:
+            print(
+                f"[{timestamp}] {PROJECT_NAME}: OK ({response.status_code})",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{timestamp}] {PROJECT_NAME}: FAILED "
+                f"({response.status_code})",
+                flush=True,
+            )
+            print(response.text, flush=True)
+
+    except requests.RequestException as e:
+        print(
+            f"[{timestamp}] {PROJECT_NAME}: CONNECTION ERROR - {e}",
+            flush=True,
+        )
+
+
+if __name__ == "__main__":
+    ping_supabase()
+</file>
+
+<file path="README.md">
+# Supabase Keeper
+
+This repository periodically sends lightweight REST queries to Supabase Free Tier projects so otherwise-idle development projects still receive external database activity. The checks run in GitHub Actions, so they do not depend on a laptop being awake.
+
+## How it works
+
+```text
+GitHub Actions
+    ↓
+Every 6 hours
+    ↓
+Supabase REST API
+    ↓
+SELECT one column LIMIT 1
+```
+
+One scheduled workflow reads a JSON array from a GitHub repository secret and checks every configured project. It continues after individual failures, then reports a failed workflow if any project did not return a successful HTTP response.
+
+## GitHub setup
+
+After creating a GitHub repository and pushing this project, open:
+
+```text
+Repository
+→ Settings
+→ Secrets and variables
+→ Actions
+→ New repository secret
+```
+
+Create a repository secret named `SUPABASE_PROJECTS`. Its value should be a JSON array:
+
+```json
+[
+  {
+    "name": "bn-club",
+    "url": "https://YOUR_PROJECT_REF.supabase.co",
+    "key": "YOUR_PUBLISHABLE_OR_ANON_KEY",
+    "table": "profiles",
+    "column": "id"
+  },
+  {
+    "name": "freightzilla",
+    "url": "https://ANOTHER_PROJECT_REF.supabase.co",
+    "key": "ANOTHER_PUBLISHABLE_OR_ANON_KEY",
+    "table": "profiles",
+    "column": "id"
+  }
+]
+```
+
+Use a Supabase publishable or anon key that RLS permits to read the selected column. Do not commit the JSON containing real keys. The `column` property is optional and defaults to `id`.
+
+A safe single-project template is also available in `supabase-projects.example.json`.
+
+## Manual test
+
+After the workflow is on GitHub, run it from:
+
+```text
+GitHub
+→ Actions
+→ Keep Supabase Projects Alive
+→ Run workflow
+```
+
+Successful output looks like:
+
+```text
+✓ bn-club: OK (200)
+✓ freightzilla: OK (200)
+
+All Supabase projects responded successfully.
+```
+
+The workflow checks every project even if an earlier one fails, and exits non-zero after the checks if there were any failures.
+
+## Adding another project
+
+Edit the `SUPABASE_PROJECTS` repository secret and append another object to its JSON array. No workflow change or additional workflow file is required.
+
+## Schedule
+
+The workflow uses `17 */6 * * *`, which runs approximately four times per day in UTC, at minute 17 every six hours. GitHub Actions schedules can be delayed during periods of high load.
+
+## Legacy local keeper
+
+`pinger.py`, `requirements.txt`, and `setup.sh` are the legacy local keeper and remain as a fallback. Do not remove them until the first GitHub Actions run completes successfully. After that successful run, these three files—and the old local cron entry, if no longer wanted—can be removed.
+</file>
+
+<file path="requirements.txt">
+requests
+python-dotenv
+</file>
+
+<file path="setup.sh">
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="$SCRIPT_DIR/.venv/bin/python"
+CRON_CMD="* * * * * cd $SCRIPT_DIR && $PYTHON pinger.py >> $SCRIPT_DIR/keeper.log 2>&1"
+
+echo "================================="
+echo " Supabase Keeper Setup"
+echo "================================="
+
+cd "$SCRIPT_DIR"
+
+echo ""
+echo "1. Creating Python virtual environment..."
+
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+fi
+
+echo "2. Installing dependencies..."
+
+"$SCRIPT_DIR/.venv/bin/pip" install -r requirements.txt
+
+echo ""
+echo "3. Checking Python script..."
+
+"$PYTHON" pinger.py
+
+echo ""
+echo "4. Installing cron job..."
+
+# Remove previous Supabase Keeper cron entries
+(crontab -l 2>/dev/null || true) | grep -v "$SCRIPT_DIR/pinger.py" | crontab -
+
+# Add new job
+(crontab -l 2>/dev/null || true; echo "$CRON_CMD") | crontab -
+
+echo ""
+echo "================================="
+echo " Setup complete!"
+echo "================================="
+echo ""
+echo "Cron job:"
+echo "$CRON_CMD"
+echo ""
+echo "Current crontab:"
+crontab -l
+echo ""
+echo "Log:"
+echo "$SCRIPT_DIR/keeper.log"
+</file>
+
+<file path="supabase-projects.example.json">
+[
+  {
+    "name": "bn_club",
+    "url": "https://lmeznamgqzoumlctizlg.supabase.co",
+    "key": "sb_publishable_3tfGjZbNknetz3CWjv86-Q_pEhVpuZb",
+    "table": "profiles",
+    "column": "id"
+  }
+]
+</file>
+
+</files>

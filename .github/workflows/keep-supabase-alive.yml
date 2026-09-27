@@ -1,4 +1,5 @@
 name: Keep Supabase Projects Alive
+# Supabase keeper workflow
 
 on:
   workflow_dispatch:

@@ -67,6 +67,19 @@ jobs:
 
             echo "Pinging $name..."
 
+            headers=(--header "apikey: $key")
+
+            if [[ "$key" == sb_secret_* ]]; then
+              echo "✗ $name: FAILED (privileged key not allowed)"
+              failures=$((failures + 1))
+              continue
+            fi
+
+            if [[ "$key" != sb_publishable_* ]]; then
+              headers+=(--header "Authorization: Bearer $key")
+            fi
+
+
             status=$(curl \
               --silent \
               --show-error \
@@ -74,8 +87,7 @@ jobs:
               --write-out "%{http_code}" \
               --connect-timeout 10 \
               --max-time 15 \
-              --header "apikey: $key" \
-              --header "Authorization: Bearer $key" \
+              "${headers[@]}" \
               --get \
               --data-urlencode "select=$column" \
               --data-urlencode "limit=1" \

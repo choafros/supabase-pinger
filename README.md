@@ -2,6 +2,8 @@
 
 This repository periodically sends lightweight REST queries to Supabase Free Tier projects so otherwise-idle development projects still receive external database activity. The checks run in GitHub Actions, so they do not depend on a laptop being awake.
 
+[![Architecture diagram of choafros/supabase-pinger](https://gitdiagram.com/choafros/supabase-pinger/diagram.png)](https://gitdiagram.com/choafros/supabase-pinger?utm_source=readme&utm_medium=picture)
+
 ## How it works
 
 ```text
